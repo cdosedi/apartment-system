@@ -188,16 +188,22 @@
         $electricBill = $hasElectricBill ? $payment->electricBill : null;
         $p = '&#8369;';
 
-        if ($hasElectricBill && $electricBill) {
+if ($hasElectricBill && $electricBill) {
             $monthStart = \Carbon\Carbon::parse($electricBill->billing_month)->startOfMonth();
             $monthEnd = \Carbon\Carbon::parse($electricBill->billing_month)->endOfMonth();
 
-            $totalRoomBedDays = 0;
-            $activeTenantsCount = $electricBill->leasePayments->count();
+            // Count active leases in billing month
+            $activeLeasesInMonth = \App\Models\Lease::where('room_id', $electricBill->room_id)
+                ->where('start_date', '<=', $monthEnd)
+                ->where('end_date', '>=', $monthStart)
+                ->get();
 
-            foreach ($electricBill->leasePayments as $rp) {
-                $tStart = \Carbon\Carbon::parse($rp->lease->start_date)->startOfDay()->max($monthStart);
-                $tEnd = \Carbon\Carbon::parse($rp->lease->end_date)->startOfDay()->min($monthEnd);
+            $totalRoomBedDays = 0;
+            $activeTenantsCount = $activeLeasesInMonth->count();
+
+            foreach ($activeLeasesInMonth as $lease) {
+                $tStart = \Carbon\Carbon::parse($lease->start_date)->startOfDay()->max($monthStart);
+                $tEnd = \Carbon\Carbon::parse($lease->end_date)->startOfDay()->min($monthEnd);
                 $totalRoomBedDays += (int) $tStart->diffInDays($tEnd) + 1;
             }
 
@@ -309,7 +315,7 @@
             </tbody>
         </table>
 
-        @if ($hasElectricBill && $electricShare > 0)
+        @if ($hasElectricBill && ($electricShare > 0 || $previousDebt > 0))
             <div style="width: 50%; float: left; margin-top: 20px;">
                 <div class="section-label">Sharing Breakdown</div>
                 <table class="calc-table">

@@ -48,7 +48,7 @@ class PaymentController extends Controller
 
     public function downloadInvoice(LeasePayment $payment)
     {
-        $payment->load(['lease.tenant', 'lease.room']);
+        $payment->load(['lease.tenant', 'lease.room', 'electricBill']);
 
         $invoice = $payment->invoice ?? Invoice::create([
             'lease_payment_id' => $payment->id,
@@ -67,7 +67,7 @@ class PaymentController extends Controller
         $receipt = $payment->receipt;
         abort_if(! $receipt, 404, 'Receipt not found.');
 
-        $receipt->load(['leasePayment.lease.tenant', 'leasePayment.lease.room']);
+        $receipt->load(['leasePayment.lease.tenant', 'leasePayment.lease.room', 'leasePayment.electricBill']);
 
         $pdf = Pdf::loadView('pdf.receipt', compact('receipt'))
             ->setPaper('a4');

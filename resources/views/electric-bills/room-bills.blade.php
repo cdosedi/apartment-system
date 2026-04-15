@@ -60,109 +60,107 @@
                                         </td>
                                         <td class="px-6 py-8 v-top">
                                             <div class="space-y-6">
-                                                @foreach ($bill->leasePayments as $payment)
+                                                @php
+                                                    // Get all leases that were active during this billing month
+                                                    $activeLeases = \App\Models\Lease::where('room_id', $room->id)
+                                                        ->where('start_date', '<=', $monthEnd)
+                                                        ->where('end_date', '>=', $monthStart)
+                                                        ->with('tenant')
+                                                        ->get();
+                                                @endphp
+                                                @forelse ($activeLeases as $lease)
                                                     @php
-                                                        $leaseStart = \Carbon\Carbon::parse(
-                                                            $payment->lease->start_date,
-                                                        )->startOfDay();
-                                                        $leaseEnd = \Carbon\Carbon::parse(
-                                                            $payment->lease->end_date,
-                                                        )->startOfDay();
+                                                        // Find the payment for this lease in this month
+                                                        $payment = $bill->leasePayments->firstWhere('lease_id', $lease->id);
+                                                        
+                                                        // If no payment attached, calculate what should be shown
+                                                        $leaseStart = \Carbon\Carbon::parse($lease->start_date)->startOfDay();
+                                                        $leaseEnd = \Carbon\Carbon::parse($lease->end_date)->startOfDay();
                                                         $stayStart = $leaseStart->max($monthStart);
                                                         $stayEnd = $leaseEnd->min($monthEnd);
                                                         $days = (int) $stayStart->diffInDays($stayEnd) + 1;
-
-                                                        $isMovingOutThisMonth = $leaseEnd->between(
-                                                            $monthStart,
-                                                            $monthEnd,
-                                                        );
-                                                        $isMovingInThisMonth = $leaseStart->between(
-                                                            $monthStart,
-                                                            $monthEnd,
-                                                        );
-
-                                                        $totalRent += $payment->amount;
-                                                        $totalElectricCollected += $payment->electric_bill_amount;
-                                                        $totalDebtCollected += $payment->carried_over_debt;
-
-                                                        // Logic for Debt Consumption Date Range
+                                                        
+                                                        $isMovingOutThisMonth = $leaseEnd->between($monthStart, $monthEnd);
+                                                        $isMovingInThisMonth = $leaseStart->between($monthStart, $monthEnd);
+                                                        
+                                                        $electricAmount = $payment ? $payment->electric_bill_amount : 0;
+                                                        $debtAmount = $payment ? $payment->carried_over_debt : 0;
+                                                        
+                                                        $totalRent += $payment ? $payment->amount : $lease->monthly_rent;
+                                                        $totalElectricCollected += $electricAmount;
+                                                        $totalDebtCollected += $debtAmount;
+                                                        
+                                                        // Debt range for display
                                                         $prevMonth = $bill->billing_month->copy()->subMonth();
-                                                        $debtRange =
-                                                            $leaseStart
-                                                                ->max($prevMonth->copy()->startOfMonth())
-                                                                ->format('M d') .
-                                                            ' – ' .
-                                                            $leaseEnd
-                                                                ->min($prevMonth->copy()->endOfMonth())
-                                                                ->format('M d, Y');
+                                                        $debtRange = $leaseStart->max($prevMonth->copy()->startOfMonth())->format('M d') . ' – ' . $leaseEnd->min($prevMonth->copy()->endOfMonth())->format('M d, Y');
                                                     @endphp
-                                                    <div
-                                                        class="flex justify-between items-start border-l-2 {{ $isMovingOutThisMonth ? 'border-red-500 bg-red-50/30' : 'border-black' }} pl-4 py-2 pr-2 transition-colors">
+                                                    <div class="flex justify-between items-start border-l-2 {{ $isMovingOutThisMonth ? 'border-red-500 bg-red-50/30' : 'border-black' }} pl-4 py-2 pr-2 transition-colors">
                                                         <div>
                                                             <div class="flex items-center gap-2">
-                                                                <p
-                                                                    class="text-xs font-bold text-black uppercase tracking-tight">
-                                                                    {{ $payment->lease->tenant->full_name }}</p>
+                                                                <p class="text-xs font-bold text-black uppercase tracking-tight">
+                                                                    {{ $lease->tenant->full_name }}</p>
                                                                 @if ($isMovingOutThisMonth)
-                                                                    <span
-                                                                        class="text-[8px] bg-red-600 text-white px-1.5 py-0.5 font-black uppercase tracking-widest">Move-out</span>
+                                                                    <span class="text-[8px] bg-red-600 text-white px-1.5 py-0.5 font-black uppercase tracking-widest">Move-out</span>
                                                                 @elseif($isMovingInThisMonth)
-                                                                    <span
-                                                                        class="text-[8px] bg-blue-600 text-white px-1.5 py-0.5 font-black uppercase tracking-widest">New
-                                                                        Tenant</span>
+                                                                    <span class="text-[8px] bg-blue-600 text-white px-1.5 py-0.5 font-black uppercase tracking-widest">New Tenant</span>
                                                                 @endif
                                                             </div>
 
                                                             <div class="flex items-center group relative mt-1">
-                                                                <p
-                                                                    class="text-[10px] {{ $isMovingOutThisMonth ? 'text-red-700 font-medium' : 'text-gray-400' }}">
+                                                                <p class="text-[10px] {{ $isMovingOutThisMonth ? 'text-red-700 font-medium' : 'text-gray-400' }}">
                                                                     <i class="fa-regular fa-calendar-check mr-1"></i>
                                                                     Stayed: {{ $stayStart->format('M d, Y') }} –
                                                                     {{ $stayEnd->format('M d, Y') }}
                                                                     <span class="mx-1 text-gray-200">|</span>
-                                                                    <span
-                                                                        class="text-black font-semibold">{{ $days }}
-                                                                        Day(s)</span>
+                                                                    <span class="text-black font-semibold">{{ $days }} Day(s)</span>
                                                                 </p>
                                                             </div>
 
                                                             @if ($isMovingOutThisMonth)
-                                                                <p
-                                                                    class="text-[9px] text-red-500 font-bold uppercase mt-1">
+                                                                <p class="text-[9px] text-red-500 font-bold uppercase mt-1">
                                                                     Final Lease Date: {{ $leaseEnd->format('M d, Y') }}
                                                                 </p>
                                                             @endif
-                                                            <p class="text-[10px] mt-1 italic text-gray-500">Rent Due:
-                                                                {{ $payment->due_date->format('M d, Y') }}</p>
+                                                            <p class="text-[10px] mt-1 italic text-gray-500">
+                                                                @if ($payment)
+                                                                    Rent Due: {{ $payment->due_date->format('M d, Y') }}
+                                                                @else
+                                                                    (Future payment - not yet due)
+                                                                @endif
+                                                            </p>
                                                         </div>
                                                         <div class="text-right">
-                                                            @if ($payment->electric_bill_amount > 0)
+                                                            @if ($electricAmount > 0)
                                                                 <p class="text-xs font-bold text-black tracking-tight">
-                                                                    Share:
-                                                                    ₱{{ number_format($payment->electric_bill_amount, 2) }}
+                                                                    Share: ₱{{ number_format($electricAmount, 2) }}
                                                                 </p>
 
-                                                                @if ($payment->carried_over_debt > 0)
+                                                                @if ($debtAmount > 0)
                                                                     <div class="mt-1">
-                                                                        <p
-                                                                            class="text-[9px] text-white bg-red-500 px-1 py-0.5 inline-block font-black uppercase">
-                                                                            + DEBT:
-                                                                            ₱{{ number_format($payment->carried_over_debt, 2) }}
+                                                                        <p class="text-[9px] text-white bg-red-500 px-1 py-0.5 inline-block font-black uppercase">
+                                                                            + DEBT: ₱{{ number_format($debtAmount, 2) }}
                                                                         </p>
-                                                                        <p
-                                                                            class="text-[8px] text-red-600 font-bold mt-0.5 uppercase tracking-tighter leading-none">
+                                                                        <p class="text-[8px] text-red-600 font-bold mt-0.5 uppercase tracking-tighter leading-none">
                                                                             For: {{ $debtRange }}
                                                                         </p>
                                                                     </div>
                                                                 @endif
                                                             @else
-                                                                <span
-                                                                    class="text-[9px] px-2 py-1 bg-gray-100 text-gray-400 font-bold uppercase tracking-tighter italic">First
-                                                                    Month (Deferred)</span>
+                                                                <span class="text-[9px] px-2 py-1 bg-gray-100 text-gray-400 font-bold uppercase tracking-tighter italic">
+                                                                    @if ($payment)
+                                                                        First Month (Deferred)
+                                                                    @else
+                                                                        (No bill yet)
+                                                                    @endif
+                                                                </span>
                                                             @endif
                                                         </div>
                                                     </div>
-                                                @endforeach
+                                                @empty
+                                                    <div class="text-center py-4 text-gray-400 italic">
+                                                        No tenants during this period
+                                                    </div>
+                                                @endforelse
                                             </div>
 
                                             <div
@@ -203,6 +201,12 @@
                             </tbody>
                         </table>
                     </div>
+
+                    @if ($bills->hasPages())
+                        <div class="px-6 py-4 border-t border-gray-100">
+                            {{ $bills->links() }}
+                        </div>
+                    @endif
                 @endif
             </div>
         </div>

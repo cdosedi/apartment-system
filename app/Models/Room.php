@@ -15,19 +15,6 @@ class Room extends Model
         'status' => 'string',
     ];
 
-    public function getStatusAttribute($value)
-    {
-        $currentTenants = $this->activeLeases()->count();
-
-        return $currentTenants < $this->bed_capacity ? 'available' : 'occupied';
-    }
-
-    public function setStatusAttribute($value)
-    {
-
-        $this->attributes['status'] = $value;
-    }
-
     public function getRoomDisplayAttribute()
     {
         return 'Room '.$this->room_number;

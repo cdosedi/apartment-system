@@ -73,8 +73,14 @@ DB_PASSWORD=your_password
 
 ```bash
 php artisan migrate
-php artisan db:seed  # Optional: seeds sample data
+php artisan db:seed --class=TenantLeaseSeeder  # Seeds sample data
 ```
+
+The seeder includes:
+- 40 rooms with 3-bed capacity each
+- Multiple tenants with overlapping leases
+- Balanced payment statuses (paid, pending, overdue)
+- Electric bills with proper pro-rated sharing calculation
 
 ### 4. Build Frontend Assets
 
@@ -199,6 +205,20 @@ The system will automatically:
    - Calculates pro-rated shares per tenant
    - Distributes to their pending payments
    - Tracks unpaid debt for carry-over
+
+### Electric Bill Sharing Logic
+
+The system uses **bed-days calculation** for fair pro-rating:
+
+1. **Calculate Total Room Bed-Days**: Sum of all tenants' occupied days in the billing month
+2. **Calculate Tenant's Share**: `(Tenant's Days / Total Room Bed-Days) × Room Total Bill`
+3. **Handle Move-in/Move-out**: First month and last month are pro-rated based on actual stay
+4. **Debt Carry-over**: If payment is not yet made, electric debt carries to next month
+
+**Payment Status Logic**:
+- **Paid on time**: Electric is deferred to next month (collected with next bill)
+- **Paid late**: Current electric + previous debt is collected immediately
+- **Overdue**: Current electric + previous debt shown, debt cleared after processing
 
 ### Processing Payments
 

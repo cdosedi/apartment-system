@@ -97,7 +97,7 @@ class ElectricBillController extends Controller
         return back()->with('success', 'Bill updated and debt preserved.');
     }
 
-    protected function calculateAndApplyBills($room, $billingStart, $billingEnd, $electricBill)
+    public function calculateAndApplyBills($room, $billingStart, $billingEnd, $electricBill)
     {
         $eligibleLeases = Lease::where('room_id', $room->id)
             ->where('start_date', '<=', $billingEnd)
@@ -112,7 +112,8 @@ class ElectricBillController extends Controller
         foreach ($eligibleLeases as $lease) {
             $start = Carbon::parse($lease->start_date)->max($billingStart);
             $end = Carbon::parse($lease->end_date)->min($billingEnd);
-            $totalBedDays += $start->diffInDays($end) + 1;
+            $days = (int) ($start->diffInDays($end) + 1);
+            $totalBedDays += $days > 0 ? $days : 0;
         }
 
         $totalBill = $electricBill->total_amount;
@@ -121,7 +122,8 @@ class ElectricBillController extends Controller
         foreach ($eligibleLeases as $lease) {
             $start = Carbon::parse($lease->start_date)->max($billingStart);
             $end = Carbon::parse($lease->end_date)->min($billingEnd);
-            $days = $start->diffInDays($end) + 1;
+            $days = (int) ($start->diffInDays($end) + 1);
+            $days = $days > 0 ? $days : 0;
 
             $currentShare = round($costPerDay * $days, 2);
 
@@ -141,18 +143,32 @@ class ElectricBillController extends Controller
             }
 
             $isMoveInMonth = Carbon::parse($lease->start_date)->isSameMonth($billingStart);
-            $isPaidAdvance = ($payment->status === 'paid');
+            $isPaidOnTime = $payment->status === 'paid' && $payment->paid_at && $payment->paid_at->lte($payment->due_date);
+            $isPaidLate = $payment->status === 'paid' && $payment->paid_at && $payment->paid_at->gt($payment->due_date);
 
-            if ($isMoveInMonth || $isPaidAdvance) {
+            if ($isMoveInMonth) {
+                $previousDebt = $lease->pending_electric_debt;
 
                 $lease->increment('pending_electric_debt', $currentShare);
+                $lease->refresh();
 
                 $payment->update([
                     'electric_bill_amount' => 0,
-                    'carried_over_debt' => 0,
+                    'carried_over_debt' => $previousDebt,
                     'electric_bill_id' => $electricBill->id,
                 ]);
-            } else {
+            } elseif ($isPaidOnTime) {
+                $previousDebt = $lease->pending_electric_debt;
+
+                $lease->increment('pending_electric_debt', $currentShare);
+                $lease->refresh();
+
+                $payment->update([
+                    'electric_bill_amount' => 0,
+                    'carried_over_debt' => $previousDebt,
+                    'electric_bill_id' => $electricBill->id,
+                ]);
+            } elseif ($isPaidLate) {
 
                 $debtToCollect = $lease->pending_electric_debt;
 
@@ -163,6 +179,19 @@ class ElectricBillController extends Controller
                 ]);
 
                 $lease->update(['pending_electric_debt' => 0]);
+            } else {
+                // Not paid yet - overdue or pending
+                $debtToCollect = $lease->pending_electric_debt;
+
+                $payment->update([
+                    'electric_bill_amount' => $currentShare,
+                    'carried_over_debt' => $debtToCollect,
+                    'electric_bill_id' => $electricBill->id,
+                ]);
+
+                if ($payment->status === 'overdue') {
+                    $lease->update(['pending_electric_debt' => 0]);
+                }
             }
         }
     }

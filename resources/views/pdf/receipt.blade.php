@@ -148,18 +148,50 @@
         $billingMonth = $payment->due_date->format('F Y');
         $debtDateRange = '';
 
+        $electricConsumption = '';
+        $electricDays = 0;
+        
         if ($payment->electricBill) {
             $roomTotalBill = $payment->electricBill->total_amount;
+            $bill = $payment->electricBill;
+            $billingMonth = $bill->billing_month;
+            $billingStart = $billingMonth->copy()->startOfMonth();
+            $billingEnd = $billingMonth->copy()->endOfMonth();
+            
+            // Count active tenants during billing month
+            $activeLeases = \App\Models\Lease::where('room_id', $payment->lease->room_id)
+                ->where('start_date', '<=', $billingEnd)
+                ->where('end_date', '>=', $billingStart)
+                ->get();
+            
+            $totalBedDays = 0;
+            $thisLeaseDays = 0;
+            
+            foreach ($activeLeases as $al) {
+                $ls = \Carbon\Carbon::parse($al->start_date)->max($billingStart);
+                $le = \Carbon\Carbon::parse($al->end_date)->min($billingEnd);
+                $days = (int) $ls->diffInDays($le) + 1;
+                if ($days > 0) {
+                    $totalBedDays += $days;
+                    if ($al->id === $payment->lease->id) {
+                        $thisLeaseDays = $days;
+                        $electricDays = $days;
+                        $electricConsumption = $ls->format('M d') . ' - ' . $le->format('M d') . ' (' . $days . ' days)';
+                    }
+                }
+            }
+            
+            $tenantCount = $totalBedDays > 0 ? $activeLeases->count() : 1;
 
-            $tenantCount = $payment->electricBill->leasePayments()->count();
-
-            $leaseStart = \Carbon\Carbon::parse($payment->lease->start_date)->startOfDay();
-            $leaseEnd = \Carbon\Carbon::parse($payment->lease->end_date)->startOfDay();
-            $prevMonthObj = $payment->electricBill->billing_month->copy()->subMonth();
-
-            $debtStart = $leaseStart->max($prevMonthObj->copy()->startOfMonth());
-            $debtEnd = $leaseEnd->min($prevMonthObj->copy()->endOfMonth());
-            $debtDateRange = $debtStart->format('M d, Y') . ' – ' . $debtEnd->format('M d, Y');
+            // For carried debt display
+            if ($previousDebt > 0) {
+                $prevMonthObj = $billingMonth->copy()->subMonth();
+                $leaseStart = \Carbon\Carbon::parse($payment->lease->start_date)->startOfDay();
+                $leaseEnd = \Carbon\Carbon::parse($payment->lease->end_date)->startOfDay();
+                $debtStart = $leaseStart->max($prevMonthObj->copy()->startOfMonth());
+                $debtEnd = $leaseEnd->min($prevMonthObj->copy()->endOfMonth());
+                $debtDateRange = $debtStart->format('M d, Y') . ' – ' . $debtEnd->format('M d, Y');
+            }
         }
     @endphp
 
@@ -217,8 +249,8 @@
             </tr>
             <tr>
                 <td colspan="2" class="electric-note">
-                    Total: {!! $p !!}{{ number_format($roomTotalBill, 2) }} shared by {{ $tenantCount }}
-                    tenants.
+                    Used: {{ $electricConsumption }}<br>
+                    Room: {!! $p !!}{{ number_format($roomTotalBill, 2) }} ÷ {{ $totalBedDays }} days
                 </td>
             </tr>
         @endif

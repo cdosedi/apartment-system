@@ -20,20 +20,62 @@
                 return null;
             }
 
-            $roomTotal = $payment->electricBill->total_amount;
-            $tenantCount = $payment->electricBill->leasePayments()->count();
+            $bill = $payment->electricBill;
+            $roomTotal = $bill->total_amount;
+            $lease = $payment->lease;
+            $room = $lease->room;
+            $billingMonth = $bill->billing_month;
+            
+            // Calculate consumption period for this specific tenant
+            $billingStart = $billingMonth->copy()->startOfMonth();
+            $billingEnd = $billingMonth->copy()->endOfMonth();
+            
+            // Get all active leases that overlap with this billing month
+            $activeLeases = \App\Models\Lease::where('room_id', $room->id)
+                ->where('start_date', '<=', $billingEnd)
+                ->where('end_date', '>=', $billingStart)
+                ->get();
+            
+            // Calculate total bed-days
+            $totalBedDays = 0;
+            $thisLeaseDays = 0;
+            $thisLeaseStart = null;
+            $thisLeaseEnd = null;
+            
+            foreach ($activeLeases as $al) {
+                $start = \Carbon\Carbon::parse($al->start_date)->max($billingStart);
+                $end = \Carbon\Carbon::parse($al->end_date)->min($billingEnd);
+                $days = (int) $start->diffInDays($end) + 1;
+                $totalBedDays += $days;
+                
+                if ($al->id === $lease->id) {
+                    $thisLeaseDays = (int) $days;
+                    $thisLeaseStart = $start->format('M d');
+                    $thisLeaseEnd = $end->format('M d');
+                }
+            }
+            
+            // Calculate share
+            $costPerDay = $totalBedDays > 0 ? ($roomTotal / $totalBedDays) : 0;
+            $share = round($costPerDay * $thisLeaseDays, 2);
 
-            $leaseStart = \Carbon\Carbon::parse($payment->lease->start_date)->startOfDay();
-            $leaseEnd = \Carbon\Carbon::parse($payment->lease->end_date)->startOfDay();
-            $prevMonthObj = $payment->electricBill->billing_month->copy()->subMonth();
-
-            $debtStart = $leaseStart->max($prevMonthObj->copy()->startOfMonth());
-            $debtEnd = $leaseEnd->min($prevMonthObj->copy()->endOfMonth());
+            // Determine if this electric is for current month or deferred from previous
+            $isDeferred = $payment->carried_over_debt > 0 && $payment->electric_bill_amount == 0;
+            $isCurrent = $payment->electric_bill_amount > 0;
+            
+            // Consumption period text
+            $consumptionPeriod = $thisLeaseStart . ' - ' . $thisLeaseEnd . ' (' . (int) $thisLeaseDays . ' days)';
 
             return [
                 'room_total' => $roomTotal,
-                'tenant_count' => $tenantCount,
-                'period' => $debtStart->format('M d, Y') . ' – ' . $debtEnd->format('M d, Y'),
+                'tenant_count' => $activeLeases->count(),
+                'bill_month' => $bill->billing_month->format('M Y'),
+                'is_deferred' => $isDeferred,
+                'is_current' => $isCurrent,
+                'debt_range' => '',
+                'share' => $share,
+                'consumption_period' => $consumptionPeriod,
+                'consumption_days' => (int) $thisLeaseDays,
             ];
         };
     @endphp
@@ -97,16 +139,16 @@
                                 <tr>
                                     <th
                                         class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                                        Due Date</th>
+                                        Monthly Rent Due</th>
                                     <th
                                         class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                                        Monthly Rent</th>
+                                        Base Rent</th>
                                     <th
                                         class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                                         Electric Details</th>
                                     <th
                                         class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
-                                        Total Settled</th>
+                                        Total Payable</th>
                                     <th
                                         class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                                         Status</th>
@@ -123,7 +165,10 @@
                                     @php $e = $getElectricData($payment); @endphp
                                     <tr class="{{ $payment->status === 'overdue' ? 'bg-red-50' : '' }}">
                                         <td class="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
-                                            {{ $payment->due_date->format('M d, Y') }}
+                                            <div>{{ $payment->due_date->format('M d, Y') }}</div>
+                                            @if($payment->carried_over_debt > 0)
+                                            <div class="text-[10px] text-orange-600 font-medium">+Prev Balance</div>
+                                            @endif
                                         </td>
                                         <td class="px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
                                             ₱{{ number_format($payment->amount, 2) }}
@@ -131,16 +176,35 @@
                                         <td class="px-3 py-3 whitespace-nowrap text-sm">
                                             @if ($e)
                                                 <div class="flex flex-col">
+                                                    @if($e['is_current'])
+                                                    {{-- Current electric bill for this period --}}
                                                     <div class="flex items-center font-bold text-blue-800">
                                                         <i class="fa-solid fa-bolt text-yellow-500 mr-1 text-xs"></i>
-                                                        ₱{{ number_format($payment->electric_bill_amount, 2) }}
+                                                        ₱{{ number_format($e['share'], 2) }}
                                                     </div>
-                                                    <div class="text-[10px] text-gray-500 leading-tight">
-                                                        Total Bill: ₱{{ number_format($e['room_total'], 2) }}
-                                                        ({{ $e['tenant_count'] }} tenants)
-                                                        <br>
-                                                        Period: {{ $e['period'] }}
+                                                    <div class="text-[10px] text-blue-600 font-medium">
+                                                        {{ $e['consumption_period'] }}
                                                     </div>
+                                                    <div class="text-[10px] text-gray-500">
+                                                        {{ $e['bill_month'] }} · {{ $e['tenant_count'] }} tenants
+                                                    </div>
+                                                    @elseif($e['is_deferred'])
+                                                    {{-- Deferred electric from previous months --}}
+                                                    <div class="flex items-center font-bold text-orange-600">
+                                                        <i class="fa-solid fa-clock text-orange-500 mr-1 text-xs"></i>
+                                                        ₱{{ number_format($payment->carried_over_debt, 2) }}
+                                                    </div>
+                                                    <div class="text-[10px] text-orange-600 font-medium">
+                                                        Carried Balance
+                                                    </div>
+                                                    @else
+                                                    <span class="text-gray-400">—</span>
+                                                    @endif
+                                                    @if($e['tenant_count'] > 0)
+                                                    <div class="text-[10px] text-gray-400 leading-tight">
+                                                        Room: ₱{{ number_format($e['room_total'], 2) }}
+                                                    </div>
+                                                    @endif
                                                 </div>
                                             @else
                                                 <span class="text-gray-400">—</span>

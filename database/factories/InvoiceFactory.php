@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\LeasePayment;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -9,15 +10,19 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  */
 class InvoiceFactory extends Factory
 {
-    /**
-     * Define the model's default state.
-     *
-     * @return array<string, mixed>
-     */
     public function definition(): array
     {
         return [
-            //
+            'lease_payment_id' => LeasePayment::factory(),
+            'invoice_number' => 'INV-'.$this->faker->uuid(),
+            'status' => 'pending',
         ];
+    }
+
+    public function paid(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => 'paid',
+        ]);
     }
 }

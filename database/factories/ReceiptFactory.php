@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\LeasePayment;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -9,15 +10,27 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  */
 class ReceiptFactory extends Factory
 {
-    /**
-     * Define the model's default state.
-     *
-     * @return array<string, mixed>
-     */
     public function definition(): array
     {
         return [
-            //
+            'lease_payment_id' => LeasePayment::factory(),
+            'receipt_number' => 'REC-'.$this->faker->uuid(),
+            'payment_method' => 'cash',
+            'amount_paid' => $this->faker->numberBetween(4500, 8000),
         ];
+    }
+
+    public function cash(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'payment_method' => 'cash',
+        ]);
+    }
+
+    public function ecash(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'payment_method' => 'e-cash',
+        ]);
     }
 }

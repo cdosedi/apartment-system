@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Http\Controllers\ElectricBillController;
 use App\Models\ElectricBill;
 use App\Models\Invoice;
 use App\Models\Lease;
@@ -18,227 +19,295 @@ class TenantLeaseSeeder extends Seeder
 {
     public function run(): void
     {
-        DB::transaction(function () {
+        $today = Carbon::now();
 
-            $admin = User::firstOrCreate(['email' => 'admin@admin.com'], ['name' => 'Admin', 'password' => bcrypt('admin123'), 'is_admin' => true]);
-            Room::query()->delete();
-            for ($i = 1; $i <= 40; $i++) {
-                Room::create(['room_number' => (string) $i, 'bed_capacity' => 3, 'status' => 'available']);
-            }
+        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        Receipt::truncate();
+        Invoice::truncate();
+        LeasePayment::truncate();
+        ElectricBill::truncate();
+        Lease::truncate();
+        Tenant::truncate();
+        Room::truncate();
+        DB::statement('SET FOREIGN_KEY_CHECKS=1');
 
-            $rooms = Room::all();
-            $today = Carbon::create(2026, 2, 12);
-            $simStart = Carbon::create(2021, 1, 1);
+        $admin = User::firstOrCreate(
+            ['email' => 'admin@admin.com'],
+            ['name' => 'Admin', 'password' => bcrypt('admin123'), 'is_admin' => true]
+        );
 
-            $names = [
-                'Carlos Manalastas', 'Roy Dimaculangan', 'Maria Salcedo', 'Elena Gonzales', 'Juan Reodica', 'Antonio Lumbres', 'Jose Regalado', 'Melchora Alonzo', 'Andres Bautista', 'Emilio Aguillon',
-                'Gabriela Soriano', 'Teresa Mercado', 'Francisco Baltazar', 'Juan Lontoc', 'Marcelo Peralta', 'Gregorio Pascual', 'Apolinario Mendoza', 'Diego Santos', 'Ramil Lapuz', 'Sultan Karim',
-                'Panday Pineda', 'Mariano Prado', 'Graciano Javier', 'Trinidad Torres', 'Agueda Evangelista',
+        $this->createRooms();
+        $this->createTenantsAndLeases($admin, $today);
+        $this->createPaymentsForAllLeases($today);
+        $this->createElectricBills($today);
+        $this->applyElectricBillCalculations();
+        $this->markFirstMonthAsPaid();
 
-                'Ramon Villareal', 'Ferdinand Cabrera', 'Corazon Marquez', 'Fidel Sandoval', 'Joseph Lacsamana', 'Gloria Dizon', 'Benigno Tolentino', 'Rodrigo Villamor', 'Bongbong Alvarado', 'Sara Mangubat',
-            ];
+        if ($this->command) {
+            $stats = $this->getStats();
+            $this->command->info("✅ Data: {$stats['tenants']} tenants, {$stats['rooms_occupied']}/{$stats['rooms']} rooms | Active: {$stats['active_leases']} | Expired: {$stats['expired_leases']}");
+            $this->command->info("   Payments: {$stats['payments']} | w/ Bills: {$stats['payments_with_bills']} | Invoices: {$stats['invoices']} | Receipts: {$stats['receipts']}");
+        }
+    }
 
-            foreach ($names as $index => $name) {
+    protected function createRooms(): void
+    {
+        for ($i = 1; $i <= 40; $i++) {
+            Room::create([
+                'room_number' => (string) $i,
+                'bed_capacity' => 3,
+                'status' => 'available',
+            ]);
+        }
+    }
+
+    protected function createTenantsAndLeases(User $admin, Carbon $today): void
+    {
+        $filipinoNames = [
+            ['Carlos', 'Manalastas'], ['Roy', 'Dimaculangan'], ['Maria', 'Salcedo'],
+            ['Elena', 'Gonzales'], ['Juan', 'Reodica'], ['Antonio', 'Lumbres'],
+            ['Jose', 'Regalado'], ['Melchora', 'Alonzo'], ['Andres', 'Bautista'],
+            ['Emilio', 'Aguillon'], ['Gabriela', 'Soriano'], ['Teresa', 'Mercado'],
+            ['Francisco', 'Baltazar'], ['Juan', 'Lontoc'], ['Marcelo', 'Peralta'],
+            ['Gregorio', 'Pascual'], ['Apolinario', 'Mendoza'], ['Diego', 'Santos'],
+            ['Ramil', 'Lapuz'], ['Sultan', 'Karim'], ['Mariano', 'Prado'],
+            ['Graciano', 'Javier'], ['Trinidad', 'Torres'], ['Agueda', 'Evangelista'],
+            ['Pedro', 'Cruz'], ['Maria', 'Luna'], ['Rosa', 'Santos'], ['Miguel', 'Reyes'],
+            ['Lucia', 'Flores'], ['Carmen', 'Vergara'], ['Barbara', 'Castro'], ['Patricia', 'Morales'],
+            ['Jennifer', 'Martinez'], ['Catherine', 'Gomez'], ['Jonathan', 'Diaz'], ['Christian', 'Torres'],
+        ];
+
+        $roomConfigs = [
+            1 => [['idx' => 0, 'start' => -18, 'dur' => 24], ['idx' => 3, 'start' => -12, 'dur' => 24], ['idx' => 6, 'start' => -3, 'dur' => 12]],
+            2 => [['idx' => 1, 'start' => -17, 'dur' => 24], ['idx' => 4, 'start' => -11, 'dur' => 24], ['idx' => 7, 'start' => -4, 'dur' => 24]],
+            3 => [['idx' => 2, 'start' => -16, 'dur' => 24], ['idx' => 5, 'start' => -10, 'dur' => 24], ['idx' => 8, 'start' => -2, 'dur' => 24], ['idx' => 20, 'start' => 0, 'dur' => 12]],
+            4 => [['idx' => 9, 'start' => -15, 'dur' => 24], ['idx' => 10, 'start' => -9, 'dur' => 24], ['idx' => 21, 'start' => -1, 'dur' => 12]],
+            5 => [['idx' => 11, 'start' => -14, 'dur' => 24], ['idx' => 12, 'start' => -8, 'dur' => 24], ['idx' => 22, 'start' => 0, 'dur' => 12]],
+            6 => [['idx' => 13, 'start' => -13, 'dur' => 24], ['idx' => 14, 'start' => -7, 'dur' => 24], ['idx' => 23, 'start' => -1, 'dur' => 12]],
+            7 => [['idx' => 15, 'start' => -20, 'dur' => 24], ['idx' => 16, 'start' => -14, 'dur' => 24], ['idx' => 17, 'start' => -5, 'dur' => 24]],
+            8 => [['idx' => 18, 'start' => -6, 'dur' => 24], ['idx' => 19, 'start' => -1, 'dur' => 24]],
+        ];
+
+        $nameIdx = 0;
+        foreach ($roomConfigs as $roomNum => $configs) {
+            $room = Room::where('room_number', (string) $roomNum)->first();
+            foreach ($configs as $cfg) {
+                $name = $filipinoNames[$cfg['idx']];
+                $fullName = $name[0].' '.$name[1];
+
                 $tenant = Tenant::create([
-                    'full_name' => $name,
-                    'email' => strtolower(str_replace(' ', '.', $name)).$index.'@test.com',
+                    'full_name' => $fullName,
+                    'email' => strtolower($name[0]).'.'.strtolower($name[1]).($nameIdx + 1).'@test.com',
                     'contact_number' => '09'.rand(100000000, 999999999),
                     'address' => 'Philippines',
                     'status' => 'active',
                     'created_by' => $admin->id,
-                    'emergency_contact_name' => 'Contact',
+                    'emergency_contact_name' => 'Emergency Contact',
                     'emergency_contact_number' => '09111111111',
                 ]);
 
-                $currentLeaseStart = $simStart->copy()->addMonths(rand(0, 12));
+                $startDate = $today->copy()->addMonths($cfg['start']);
+                $endDate = $startDate->copy()->addMonths($cfg['dur'])->subDay();
+                $status = $endDate->lt($today) ? 'expired' : 'active';
+                $rent = 4500 + ($cfg['idx'] * 100) + rand(-50, 50);
 
-                for ($contractCount = 0; $contractCount < 3; $contractCount++) {
-                    $isFinalContract = ($contractCount === 2);
+                Lease::create([
+                    'tenant_id' => $tenant->id,
+                    'room_id' => $room->id,
+                    'start_date' => $startDate,
+                    'end_date' => $endDate,
+                    'duration_months' => $cfg['dur'],
+                    'monthly_rent' => $rent,
+                    'status' => $status,
+                    'pending_electric_debt' => 0,
+                ]);
 
-                    if (($index < 15 || $index >= 25) && $isFinalContract) {
-                        $duration = 24;
-                        $currentLeaseStart = $today->copy()->subMonths(14);
+                $nameIdx++;
+            }
+        }
+
+        for ($roomNum = 9; $roomNum <= 40; $roomNum++) {
+            $room = Room::where('room_number', (string) $roomNum)->first();
+            $numTenants = rand(1, 2);
+
+            for ($t = 0; $t < $numTenants; $t++) {
+                $names = ['Pedro', 'Juan', 'Maria', 'Jose', 'Ana', 'Lisa', 'Mike', 'Sarah'];
+                $name = $names[array_rand($names)];
+
+                $tenant = Tenant::create([
+                    'full_name' => "$name Room$roomNum",
+                    'email' => "room{$roomNum}_ten{$t}@test.com",
+                    'contact_number' => '09'.rand(100000000, 999999999),
+                    'address' => 'Philippines',
+                    'status' => 'active',
+                    'created_by' => $admin->id,
+                    'emergency_contact_name' => 'Emergency',
+                    'emergency_contact_number' => '09111111111',
+                ]);
+
+                $monthsAgo = rand(2, 15);
+                $duration = [6, 12, 24][array_rand([6, 12, 24])];
+                $startDate = $today->copy()->subMonths($monthsAgo);
+
+                Lease::create([
+                    'tenant_id' => $tenant->id,
+                    'room_id' => $room->id,
+                    'start_date' => $startDate,
+                    'end_date' => $startDate->copy()->addMonths($duration)->subDay(),
+                    'duration_months' => $duration,
+                    'monthly_rent' => rand(4500, 5500),
+                    'status' => 'active',
+                    'pending_electric_debt' => 0,
+                ]);
+            }
+        }
+    }
+
+    protected function createPaymentsForAllLeases(Carbon $today): void
+    {
+        $leases = Lease::with('tenant')->get();
+
+        foreach ($leases as $lease) {
+            $startDate = Carbon::parse($lease->start_date);
+            $monthsDuration = $lease->duration_months;
+
+            for ($i = 0; $i < $monthsDuration; $i++) {
+                $dueDate = $startDate->copy()->addMonths($i);
+
+                $isFirstMonth = ($i === 0);
+                $isPast = $dueDate->isPast();
+                $monthsAgoFromNow = $today->diffInMonths($dueDate);
+
+                $status = 'pending';
+                $isPaid = false;
+
+                if ($isFirstMonth) {
+                    $status = 'paid';
+                    $isPaid = true;
+                } elseif ($isPast) {
+                    $rand = rand(1, 100);
+                    if ($monthsAgoFromNow <= 2 && $rand <= 40) {
+                        $status = 'paid';
+                        $isPaid = true;
+                    } elseif ($monthsAgoFromNow <= 4 && $rand <= 25) {
+                        $status = 'paid';
+                        $isPaid = true;
+                    } elseif ($monthsAgoFromNow <= 6 && $rand <= 15) {
+                        $status = 'paid';
+                        $isPaid = true;
                     } else {
-                        $duration = [6, 12, 24][rand(0, 2)];
-                    }
-
-                    $room = $rooms->get(floor($index / 3));
-                    $lease = $this->createLease($tenant, $room, $currentLeaseStart, $duration);
-
-                    $currentLeaseStart = Carbon::parse($lease->end_date)->addDay();
-
-                    if (! $isFinalContract && $currentLeaseStart->gt($today)) {
-                        break;
+                        $status = 'overdue';
                     }
                 }
-            }
 
-            $currentDate = $simStart->copy();
-            while ($currentDate->lte($today)) {
-                $this->processMonthlyBillingCycle($currentDate, $today);
-                $currentDate->addMonth();
-            }
-        });
-
-        $this->command->info('🚀 Seeder Complete: Delinquents only owe on ACTIVE contracts.');
-    }
-
-    private function createLease($tenant, $room, $start, $months)
-    {
-
-        $endDate = $start->copy()->addMonths($months)->subDay();
-
-        $lease = Lease::create([
-            'tenant_id' => $tenant->id,
-            'room_id' => $room->id,
-            'start_date' => $start,
-            'end_date' => $endDate,
-            'duration_months' => $months,
-            'monthly_rent' => rand(4500, 5500),
-            // Carbon::now()
-            'status' => $endDate->lt(Carbon::create(2026, 2, 12)) ? 'expired' : 'active',
-            'pending_electric_debt' => 0,
-        ]);
-
-        if ($lease->status === 'active') {
-            $room->update(['status' => 'occupied']);
-        }
-
-        $this->generateContractualPayments($lease);
-
-        return $lease;
-    }
-
-    private function generateContractualPayments($lease)
-    {
-        $start = Carbon::parse($lease->start_date);
-        for ($i = 0; $i < $lease->duration_months; $i++) {
-            $dueDate = $start->copy()->addMonths($i);
-            $payment = LeasePayment::create([
-                'lease_id' => $lease->id,
-                'due_date' => $dueDate,
-                'amount' => $lease->monthly_rent,
-                'status' => 'pending',
-                'electric_bill_amount' => 0,
-                'carried_over_debt' => 0,
-            ]);
-            Invoice::create([
-                'lease_payment_id' => $payment->id,
-                'invoice_number' => 'INV-'.strtoupper(substr(md5(uniqid()), 0, 8)),
-                'status' => 'pending',
-            ]);
-        }
-    }
-
-    private function processMonthlyBillingCycle($currentDate, $today)
-    {
-        $billingStart = $currentDate->copy()->startOfMonth();
-        $billingEnd = $currentDate->copy()->endOfMonth();
-
-        $activeRooms = Room::whereHas('leases', function ($q) use ($billingStart, $billingEnd) {
-            $q->where('start_date', '<=', $billingEnd)->where('end_date', '>=', $billingStart);
-        })->get();
-
-        foreach ($activeRooms as $room) {
-            $bill = ElectricBill::create([
-                'room_id' => $room->id,
-                'billing_month' => $billingStart,
-                'total_amount' => rand(2500, 5000),
-            ]);
-            $this->applyControllerLogic($room, $billingStart, $billingEnd, $bill);
-        }
-        $this->settlePaymentsForMonth($billingStart, $today);
-    }
-
-    protected function applyControllerLogic($room, $billingStart, $billingEnd, $electricBill)
-    {
-        $leases = Lease::where('room_id', $room->id)
-            ->where('start_date', '<=', $billingEnd)
-            ->where('end_date', '>=', $billingStart)
-            ->get();
-
-        $totalDays = 0;
-        foreach ($leases as $l) {
-            $s = Carbon::parse($l->start_date)->max($billingStart);
-            $e = Carbon::parse($l->end_date)->min($billingEnd);
-            $totalDays += $s->diffInDays($e) + 1;
-        }
-
-        $costPerDay = $totalDays > 0 ? ($electricBill->total_amount / $totalDays) : 0;
-
-        foreach ($leases as $l) {
-            $s = Carbon::parse($l->start_date)->max($billingStart);
-            $e = Carbon::parse($l->end_date)->min($billingEnd);
-            $days = $s->diffInDays($e) + 1;
-            $share = round($costPerDay * $days, 2);
-
-            $payment = LeasePayment::where('lease_id', $l->id)
-                ->whereYear('due_date', $billingStart->year)
-                ->whereMonth('due_date', $billingStart->month)
-                ->first() ?: LeasePayment::where('lease_id', $l->id)->orderBy('due_date', 'desc')->first();
-
-            if (! $payment) {
-                continue;
-            }
-
-            $isMoveIn = Carbon::parse($l->start_date)->isSameMonth($billingStart);
-            if ($isMoveIn || $payment->status === 'paid') {
-                $l->increment('pending_electric_debt', $share);
-                $payment->update(['electric_bill_id' => $electricBill->id]);
-            } else {
-                $debt = $l->pending_electric_debt;
-                $payment->update([
-                    'electric_bill_amount' => $share,
-                    'carried_over_debt' => $debt,
-                    'electric_bill_id' => $electricBill->id,
+                $payment = LeasePayment::create([
+                    'lease_id' => $lease->id,
+                    'due_date' => $dueDate,
+                    'amount' => $lease->monthly_rent,
+                    'electric_bill_amount' => 0,
+                    'carried_over_debt' => 0,
+                    'electric_bill_id' => null,
+                    'status' => $status,
+                    'paid_at' => $isPaid ? $dueDate->copy()->addDays(rand(1, 5)) : null,
+                    'notes' => 'Coverage: '.$dueDate->format('M d, Y'),
                 ]);
-                $l->update(['pending_electric_debt' => 0]);
+
+                Invoice::create([
+                    'lease_payment_id' => $payment->id,
+                    'invoice_number' => 'INV-'.strtoupper(substr(md5(uniqid()), 0, 8)),
+                    'status' => $status,
+                ]);
+
+                if ($isPaid) {
+                    Receipt::create([
+                        'lease_payment_id' => $payment->id,
+                        'payment_method' => 'cash',
+                        'amount_paid' => $lease->monthly_rent,
+                        'receipt_number' => 'REC-'.$dueDate->format('Y').'-'.str_pad($payment->id, 5, '0', STR_PAD_LEFT),
+                    ]);
+                }
             }
         }
     }
 
-    private function settlePaymentsForMonth($month, $today)
+    protected function createElectricBills(Carbon $today): void
     {
-        $payments = LeasePayment::whereYear('due_date', $month->year)
-            ->whereMonth('due_date', $month->month)
-            ->where('due_date', '<', $today)
-            ->with(['lease.tenant', 'invoice'])
-            ->get();
+        $startMonth = Carbon::parse('2024-09-01');
+        $endMonth = $today->copy()->startOfMonth();
 
-        foreach ($payments as $p) {
-            $tenantEmail = $p->lease->tenant->email;
-
-            preg_match('/\d+/', $tenantEmail, $matches);
-            $tenantIndex = isset($matches[0]) ? (int) $matches[0] : 0;
-
-            $isExpired = ($p->lease->status === 'expired');
-            $isDelinquentTarget = ($tenantIndex >= 25 && $p->lease->status === 'active');
-
-            if ($isDelinquentTarget) {
+        foreach (Room::all() as $room) {
+            $roomLeases = Lease::where('room_id', $room->id)->get();
+            if ($roomLeases->isEmpty()) {
                 continue;
             }
 
-            $total = $p->amount + $p->electric_bill_amount + $p->carried_over_debt;
+            $current = $startMonth->copy();
+            $baseAmount = 2500 + ($room->id * 100);
 
-            $p->update([
-                'status' => 'paid',
-                'paid_at' => $p->due_date->copy()->addDays(rand(1, 5)),
-            ]);
-
-            if ($p->invoice) {
-                $p->invoice->update(['status' => 'paid']);
+            while ($current->lte($endMonth)) {
+                if (! ElectricBill::where('room_id', $room->id)
+                    ->where('billing_month', $current)
+                    ->exists()) {
+                    ElectricBill::create([
+                        'room_id' => $room->id,
+                        'billing_month' => $current->copy(),
+                        'total_amount' => $baseAmount,
+                    ]);
+                }
+                $baseAmount += rand(30, 80);
+                $current->addMonth();
             }
-
-            $year = $p->paid_at ? $p->paid_at->year : now()->year;
-            $nextId = (\App\Models\Receipt::max('id') ?? 0) + 1;
-            $receiptNum = 'REC-'.$year.'-'.str_pad($nextId, 5, '0', STR_PAD_LEFT);
-
-            Receipt::create([
-                'lease_payment_id' => $p->id,
-                'payment_method' => 'cash',
-                'amount_paid' => $total,
-                'receipt_number' => $receiptNum,
-            ]);
         }
+    }
+
+    protected function applyElectricBillCalculations(): void
+    {
+        $controller = app(ElectricBillController::class);
+
+        $bills = ElectricBill::orderBy('billing_month')->get();
+
+        foreach ($bills as $bill) {
+            $billingStart = $bill->billing_month->copy()->startOfMonth();
+            $billingEnd = $billingStart->copy()->endOfMonth();
+
+            $controller->calculateAndApplyBills(
+                $bill->room,
+                $billingStart,
+                $billingEnd,
+                $bill
+            );
+        }
+    }
+
+    protected function markFirstMonthAsPaid(): void
+    {
+        foreach (Lease::all() as $lease) {
+            $payments = $lease->payments()->where('status', 'paid')->get();
+
+            foreach ($payments as $payment) {
+                $receipt = $payment->receipt;
+                if ($receipt) {
+                    $totalWithElectric = $payment->amount
+                        + ($payment->electric_bill_amount ?? 0)
+                        + ($payment->carried_over_debt ?? 0);
+                    $receipt->update(['amount_paid' => $totalWithElectric]);
+                }
+            }
+        }
+    }
+
+    protected function getStats(): array
+    {
+        return [
+            'tenants' => Tenant::count(),
+            'rooms' => Room::count(),
+            'rooms_occupied' => Room::where('status', 'occupied')->count(),
+            'active_leases' => Lease::where('status', 'active')->count(),
+            'expired_leases' => Lease::where('status', 'expired')->count(),
+            'payments' => LeasePayment::count(),
+            'payments_with_bills' => LeasePayment::whereNotNull('electric_bill_id')->count(),
+            'invoices' => Invoice::count(),
+            'receipts' => Receipt::count(),
+        ];
     }
 }
